@@ -1,18 +1,31 @@
-from fastapi import FastAPI
 import pickle
 import pandas as pd
+import numpy as np
+from fastapi import FastAPI
 from pydantic import BaseModel
+import uvicorn
 
-# Load the trained model
-with open("fraud_model.pkl", "rb") as model_file:
-    model = pickle.load(model_file)
-
-# Define the FastAPI app
+# Initialize FastAPI app
 app = FastAPI()
 
-# Define request schema (ensure the features match model training data)
+# Load the trained model and scaler
+with open("fraud_model_xgb.pkl", "rb") as model_file:
+    model = pickle.load(model_file)
+
+with open("scaler.pkl", "rb") as scaler_file:
+    scaler = pickle.load(scaler_file)
+
+# Define the feature order (Ensure this matches the order during training)
+FEATURE_ORDER = [
+    "merchant_name", "category", "transaction_amount", "gender", "city", "state", "zip",
+    "client_latitude", "client_longitude", "city_population", "job", "unix_time",
+    "merchant_latitude", "merchant_longitude", "transaction_hour", "transaction_month",
+    "age", "transaction_longitude_distance", "transaction_lattitude_distance",
+    "transaction_distance", "age_intervals"
+]
+
+# Define request body format
 class Transaction(BaseModel):
-    Unnamed_0: int
     merchant_name: int
     category: int
     transaction_amount: float
@@ -35,33 +48,37 @@ class Transaction(BaseModel):
     transaction_distance: float
     age_intervals: int
 
+# API Endpoint: Health Check
 @app.get("/")
-def home():
-    return {"message": "Fraud Detection API is Running"}
+def health_check():
+    return {"status": "API is running"}
 
-@app.post("/predict/")
-def predict(transaction: Transaction):
-    # Convert input data into a DataFrame
-    data_dict = transaction.dict()
-    data_df = pd.DataFrame([data_dict])
+# API Endpoint: Predict Fraud
+@app.post("/predict")
+def predict_fraud(transaction: Transaction):
+    # Convert input data to DataFrame
+    transaction_data = pd.DataFrame([transaction.dict()])
 
     # Ensure correct feature order
-    feature_order = ['Unnamed_0', 'merchant_name', 'category', 'transaction_amount', 
-                     'gender', 'city', 'state', 'zip', 'client_latitude', 
-                     'client_longitude', 'city_population', 'job', 'unix_time', 
-                     'merchant_latitude', 'merchant_longitude', 'transaction_hour', 
-                     'transaction_month', 'age', 'transaction_longitude_distance', 
-                     'transaction_lattitude_distance', 'transaction_distance', 
-                     'age_intervals']
-    
-    data_df = data_df[feature_order]
+    transaction_data = transaction_data[FEATURE_ORDER]
 
-    # Make a prediction
-    prediction = model.predict(data_df)[0]
-    result = "Fraud" if prediction == 1 else "Not Fraud"
-    
-    return {"prediction": result}
+    # Debug: Check feature counts
+    print(f"Model trained with {scaler.n_features_in_} features")
+    print(f"Received transaction with {transaction_data.shape[1]} features")
 
+    # Scale the transaction
+    transaction_scaled = scaler.transform(transaction_data)
+
+    # Predict fraud
+    prediction = model.predict(transaction_scaled)
+    fraud_probability = model.predict_proba(transaction_scaled)[:, 1][0]
+
+    # Return response
+    return {
+        "fraud_probability": round(float(fraud_probability), 4),
+        "prediction": "FRAUD" if prediction[0] == 1 else "NOT FRAUD"
+    }
+
+# Run FastAPI server
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
